@@ -10,11 +10,9 @@ Each kubeconfig requires a Kubernetes API Server to connect to. To support high 
 
 Generate a kubeconfig file suitable for authenticating as the `admin` user:
 
-```
+```bash
 {
-  KUBERNETES_PUBLIC_ADDRESS=$(gcloud compute addresses describe kubernetes-the-hard-way \
-    --region $(gcloud config get-value compute/region) \
-    --format 'value(address)')
+  KUBERNETES_PUBLIC_ADDRESS=X.X.X.X  # the address of the floating IP you created for Kubernetes API earlier.
 
   kubectl config set-cluster kubernetes-the-hard-way \
     --certificate-authority=ca.pem \
@@ -37,34 +35,24 @@ Generate a kubeconfig file suitable for authenticating as the `admin` user:
 
 Check the health of the remote Kubernetes cluster:
 
-```
+```bash
 kubectl get componentstatuses
-```
-
-> output
-
-```
-NAME                 STATUS    MESSAGE             ERROR
-controller-manager   Healthy   ok
-scheduler            Healthy   ok
-etcd-1               Healthy   {"health":"true"}
-etcd-2               Healthy   {"health":"true"}
-etcd-0               Healthy   {"health":"true"}
+# NAME                 STATUS    MESSAGE             ERROR
+# controller-manager   Healthy   ok
+# scheduler            Healthy   ok
+# etcd-1               Healthy   {"health":"true"}
+# etcd-2               Healthy   {"health":"true"}
+# etcd-0               Healthy   {"health":"true"}
 ```
 
 List the nodes in the remote Kubernetes cluster:
 
-```
+```bash
 kubectl get nodes
-```
-
-> output
-
-```
-NAME       STATUS   ROLES    AGE    VERSION
-worker-0   Ready    <none>   117s   v1.12.0
-worker-1   Ready    <none>   118s   v1.12.0
-worker-2   Ready    <none>   118s   v1.12.0
+# NAME       STATUS   ROLES    AGE    VERSION
+# worker-0   Ready    <none>   117s   v1.12.4
+# worker-1   Ready    <none>   118s   v1.12.4
+# worker-2   Ready    <none>   118s   v1.12.4
 ```
 
 Next: [Provisioning Pod Network Routes](11-pod-network-routes.md)

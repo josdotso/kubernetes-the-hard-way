@@ -1,48 +1,28 @@
 # Prerequisites
 
-## Google Cloud Platform
+## OpenStack
 
-This tutorial leverages the [Google Cloud Platform](https://cloud.google.com/) to streamline provisioning of the compute infrastructure required to bootstrap a Kubernetes cluster from the ground up. [Sign up](https://cloud.google.com/free/) for $300 in free credits.
+This tutorial leverages [OpenStack][openstack] to handle provisioning of the compute infrastructure required to bootstrap a Kubernetes cluster from the ground up.
 
-[Estimated cost](https://cloud.google.com/products/calculator/#id=78df6ced-9c50-48f8-a670-bc5003f2ddaa) to run this tutorial: $0.22 per hour ($5.39 per day).
+This repo is forked from Kelsey Hightower's original [kubernetes-the-hard-way][kelseyhightower/kubernetes-the-hard-way] repo which leverages Google Compute Engine (GCE) instead of OpenStack.
 
-> The compute resources required for this tutorial exceed the Google Cloud Platform free tier.
+## Development Machine
 
-## Google Cloud Platform SDK
+This tutorial assumes your local machine runs Ubuntu Server 18.04 LTS amd64. You can spin such a machine up yourself using [Vagrant][vagrant].
 
-### Install the Google Cloud SDK
+On macOS, you might run:
 
-Follow the Google Cloud SDK [documentation](https://cloud.google.com/sdk/) to install and configure the `gcloud` command line utility.
-
-Verify the Google Cloud SDK version is 218.0.0 or higher:
-
-```
-gcloud version
-```
-
-### Set a Default Compute Region and Zone
-
-This tutorial assumes a default compute region and zone have been configured.
-
-If you are using the `gcloud` command-line tool for the first time `init` is the easiest way to do this:
-
-```
-gcloud init
+```bash
+mkdir -p ~/vagrant/dev
+cd !$
+vagrant init bento/ubuntu-16.04
+vagrant up
+vagrant ssh
 ```
 
-Otherwise set a default compute region:
+## Download your OpenStack RC v3 file.
 
-```
-gcloud config set compute/region us-west1
-```
-
-Set a default compute zone:
-
-```
-gcloud config set compute/zone us-west1-c
-```
-
-> Use the `gcloud compute zones list` command to view additional regions and zones.
+In the OpenStack dashboard, download the [OpenStack RC file][openstack-rc] for your OpenStack project. Save it as filename `openrc.sh` in the same directory where you ran `vagrant up` (e.g. `~/vagrant/dev/openrc.sh`). This directory is usually shared with the Vagrant machine at `/vagrant`. Putting the file here should make it readable from inside the Vagrant machine.
 
 ## Running Commands in Parallel with tmux
 
@@ -55,3 +35,10 @@ gcloud config set compute/zone us-west1-c
 > Enable `synchronize-panes`: `ctrl+b` then `shift :`. Then type `set synchronize-panes on` at the prompt. To disable synchronization: `set synchronize-panes off`.
 
 Next: [Installing the Client Tools](02-client-tools.md)
+
+<!--- Hidden References -->
+
+[kelseyhightower/kubernetes-the-hard-way]: https://github.com/kelseyhightower/kubernetes-the-hard-way
+[openstack-rc]: https://docs.openstack.org/ocata/user-guide/common/cli-set-environment-variables-using-openstack-rc.html
+[openstack]: https://www.openstack.org
+[vagrant]: https://www.vagrantup.com

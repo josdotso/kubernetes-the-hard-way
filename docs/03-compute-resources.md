@@ -1,8 +1,61 @@
 # Provisioning Compute Resources
 
-Kubernetes requires a set of machines to host the Kubernetes control plane and the worker nodes where containers are ultimately run. In this lab you will provision the compute resources required for running a secure and highly available Kubernetes cluster across a single [compute zone](https://cloud.google.com/compute/docs/regions-zones/regions-zones).
+Kubernetes requires a set of machines to host the Kubernetes control plane and the worker nodes where containers are ultimately run. In this tutorial, all of these machines will run in OpenStack.
 
-> Ensure a default compute zone and region have been set as described in the [Prerequisites](01-prerequisites.md#set-a-default-compute-region-and-zone) lab.
+## Source your OpenStack RC file.
+
+This operation configures OpenStack clients to interact with your OpenStack project. This file must be sourced in order to perform OpenStack operations.
+
+As user `vagrant` inside the Vagrant machine:
+
+```bash
+source /vagrant/openrc.sh
+```
+
+## Availability Zones (AZs)
+
+In this lab you will provision the compute resources required for running a secure and highly available Kubernetes cluster across a single [Availability Zone (AZ)][az]. Unforutnately, in some OpenStack clouds, AZs are inconsistently named across the network, storage and compute layers. Therefore, you must select an AZ for each layer.
+
+### Select an AZ for Network.
+
+Example:
+
+```bash
+neutron availability-zone-list
+# +------+----------+-----------+
+# | name | resource | state     |
+# +------+----------+-----------+
+# | nova | network  | available |
+# +------+----------+-----------+
+```
+
+### Select an AZ for Compute.
+
+Example:
+
+```bash
+openstack availability zone list
+# +-----------+-------------+
+# | Zone Name | Zone Status |
+# +-----------+-------------+
+# | cloud-1-a | available   |
+# | cloud-1-b | available   |
+# | cloud-1-c | available   |
+# +-----------+-------------+
+```
+
+### Select an AZ for Storage.
+
+Example:
+
+```bash
+cinder availability-zone-list
+# +------+-----------+
+# | Name | Status    |
+# +------+-----------+
+# | nova | available |
+# +------+-----------+
+```
 
 ## Networking
 
@@ -10,107 +63,274 @@ The Kubernetes [networking model](https://kubernetes.io/docs/concepts/cluster-ad
 
 > Setting up network policies is out of scope for this tutorial.
 
-### Virtual Private Cloud Network
+### Virtual Private Cloud Network (a.k.a. Self-Service Network)
 
-In this section a dedicated [Virtual Private Cloud](https://cloud.google.com/compute/docs/networks-and-firewalls#networks) (VPC) network will be setup to host the Kubernetes cluster.
+In this section a dedicated and private [self-service network][self-service-network] will be setup to host the Kubernetes cluster. OpenStack's self-service network primitive is similar in concept to the [Virtual Private Cloud (VPC) Networks][vpc] created in GCE and AWS.
 
-Create the `kubernetes-the-hard-way` custom VPC network:
+Create the `kubernetes-the-hard-way` self-service network:
 
+```bash
+openstack network create kubernetes-the-hard-way --availability-zone-hint nova
 ```
-gcloud compute networks create kubernetes-the-hard-way --subnet-mode custom
-```
 
-A [subnet](https://cloud.google.com/compute/docs/vpc/#vpc_networks_and_subnets) must be provisioned with an IP address range large enough to assign a private IP address to each node in the Kubernetes cluster.
+### Subnet
+
+A [subnet][self-service-network] must be provisioned with an IP address range large enough to assign a private IP address to each node in the Kubernetes cluster.
 
 Create the `kubernetes` subnet in the `kubernetes-the-hard-way` VPC network:
 
-```
-gcloud compute networks subnets create kubernetes \
-  --network kubernetes-the-hard-way \
-  --range 10.240.0.0/24
+```bash
+openstack subnet create  --network kubernetes-the-hard-way \
+  --dns-nameserver 1.1.1.1 --gateway 10.240.0.1 \
+  --subnet-range 10.240.0.0/24 kubernetes
 ```
 
 > The `10.240.0.0/24` IP address range can host up to 254 compute instances.
 
-### Firewall Rules
+### External Network (a.k.a. Floating IP Network)
 
-Create a firewall rule that allows internal communication across all protocols:
+Identify the name of your project's external or floating IP network.
 
-```
-gcloud compute firewall-rules create kubernetes-the-hard-way-allow-internal \
-  --allow tcp,udp,icmp \
-  --network kubernetes-the-hard-way \
-  --source-ranges 10.240.0.0/24,10.200.0.0/16
-```
+For example:
 
-Create a firewall rule that allows external SSH, ICMP, and HTTPS:
-
-```
-gcloud compute firewall-rules create kubernetes-the-hard-way-allow-external \
-  --allow tcp:22,tcp:6443,icmp \
-  --network kubernetes-the-hard-way \
-  --source-ranges 0.0.0.0/0
+```bash
+openstack network list --external --format json | jq '.[0].Name' --raw-output
+# tenant-internal-floatingip-net
 ```
 
-> An [external load balancer](https://cloud.google.com/compute/docs/load-balancing/network/) will be used to expose the Kubernetes API Servers to remote clients.
+### Router
 
-List the firewall rules in the `kubernetes-the-hard-way` VPC network:
+An OpenStack router must be created to route traffic to and from the private network.
 
-```
-gcloud compute firewall-rules list --filter="network:kubernetes-the-hard-way"
+```bash
+openstack router create kubernetes-the-hard-way
+openstack router set kubernetes-the-hard-way --external-gateway EXTERNAL_NETWORK
+openstack router add subnet kubernetes-the-hard-way kubernetes
 ```
 
-> output
+### Security Groups
 
+Create a Security Group that allows internal communication across all protocols:
+
+```bash
+openstack security group create kubernetes-the-hard-way-allow-internal
+
+openstack security group rule create \
+  --remote-ip 10.240.0.0/24 \
+  --protocol any \
+  kubernetes-the-hard-way-allow-internal
+
+openstack security group rule create \
+  --remote-ip 10.200.0.0/16 \
+  --protocol any \
+  kubernetes-the-hard-way-allow-internal
 ```
-NAME                                    NETWORK                  DIRECTION  PRIORITY  ALLOW                 DENY
-kubernetes-the-hard-way-allow-external  kubernetes-the-hard-way  INGRESS    1000      tcp:22,tcp:6443,icmp
-kubernetes-the-hard-way-allow-internal  kubernetes-the-hard-way  INGRESS    1000      tcp,udp,icmp
+
+Create a security group that allows external SSH, ICMP, and HTTPS:
+
+```bash
+openstack security group create kubernetes-the-hard-way-allow-external
+
+openstack security group rule create \
+  --remote-ip 0.0.0.0/0 \
+  --protocol tcp \
+  --dst-port 22 \
+  kubernetes-the-hard-way-allow-external
+
+openstack security group rule create \
+  --remote-ip 0.0.0.0/0 \
+  --protocol tcp \
+  --dst-port 6443 \
+  kubernetes-the-hard-way-allow-external
+
+openstack security group rule create \
+  --remote-ip 0.0.0.0/0 \
+  --protocol icmp \
+  kubernetes-the-hard-way-allow-external
 ```
+
+> An [external load balancer][lb] will be used to expose the Kubernetes API Servers to remote clients.
 
 ### Kubernetes Public IP Address
 
-Allocate a static IP address that will be attached to the external load balancer fronting the Kubernetes API Servers:
+Allocate a static IP address that will be attached to the external load balancer fronting the Kubernetes API Servers. Make note of the floating IP for use later when you create the Kubernetes API Server load balancer.
 
-```
-gcloud compute addresses create kubernetes-the-hard-way \
-  --region $(gcloud config get-value compute/region)
-```
-
-Verify the `kubernetes-the-hard-way` static IP address was created in your default compute region:
-
-```
-gcloud compute addresses list --filter="name=('kubernetes-the-hard-way')"
+```bash
+openstack floating ip create FLOATING_IP_NETWORK_ID --format json | jq '. | {"id": .id, "ip": .floating_ip_address}'
 ```
 
-> output
+Output:
 
+```json
+{
+  "id": "42cbe563-4371-4dd7-a8ac-78498ee70691",
+  "ip": "X.X.X.X"
+}
 ```
-NAME                     REGION    ADDRESS        STATUS
-kubernetes-the-hard-way  us-west1  XX.XXX.XXX.XX  RESERVED
+
+Verify the floating IP address was created:
+
+```bash
+openstack floating ip show FLOATING_IP_ID --format json
+```
+
+Output:
+
+```json
+{
+  "router_id": null,
+  "status": "DOWN",
+  "description": "",
+  "tags": [],
+  "subnet_id": null,
+  "dns_name": "",
+  "created_at": "2019-01-03T21:44:20Z",
+  "updated_at": "2019-01-03T21:44:20Z",
+  "dns_domain": "",
+  "floating_network_id": "96af047d-5522-4a02-8613-20067c347332",
+  "port_details": null,
+  "fixed_ip_address": null,
+  "floating_ip_address": "X.X.X.X",
+  "location": null,
+  "revision_number": 1,
+  "qos_policy_id": null,
+  "project_id": "xyz",
+  "port_id": null,
+  "id": "42cbe563-4371-4dd7-a8ac-78498ee70691",
+  "name": "X.X.X.X"
+}
 ```
 
 ## Compute Instances
 
-The compute instances in this lab will be provisioned using [Ubuntu Server](https://www.ubuntu.com/server) 18.04, which has good support for the [containerd container runtime](https://github.com/containerd/containerd). Each compute instance will be provisioned with a fixed private IP address to simplify the Kubernetes bootstrapping process.
+The compute instances in this lab will be provisioned using [Ubuntu Server 18.04 LTS amd64][ubuntu], which has good support for the [containerd container runtime](https://github.com/containerd/containerd). Each compute instance will be provisioned with a fixed private IP address to simplify the Kubernetes bootstrapping process.
+
+> In OpenStack clouds where only Ubuntu Server 16.04 is availble, you can use `apt` to upgrade to 18.04. In OpenStack clouds where neither image is available you will need to add such an image. Upgrading Ubuntu and adding images to OpenStack are outside the scope of this tutorial.
+
+You can identify instance creation prerequisites using these commands:
+
+- `openstack flavor list`
+- `openstack image list`
+- `openstack keypair list`
+- `openstack security group list`
+
+Upstream documentation on how to identify instance prerequisites and create OpenStack instances on the command line is [here][openstack-create-instances].
+
+### Bastion Server
+
+Create one instances that will act as a bastion host. You will SSH through this host to reach those in the private network.
+
+```bash
+## customize these
+COMPUTE_AZ=cloud-1-c
+FLAVOR=1vCPUx2GB
+KEYPAIR=my-keypair
+STORAGE_AZ=nova
+UBUNTU_IMAGE=UBUNTU-18.04
+
+## Instead of creating just bastion-0, you could create
+## multiple bastion hosts and place a cloud load balancer
+## in front of them, but that's out of scope for this tutorial.
+for i in 0; do
+  openstack volume create --image ${UBUNTU_IMAGE} \
+    --availability-zone ${STORAGE_AZ} --size 20 \
+    --bootable bastion-${i}
+
+  openstack server create \
+    --availability-zone ${COMPUTE_AZ} --key-name ${KEYPAIR} --volume bastion-${i} \
+    --flavor ${FLAVOR} --security-group kubernetes-the-hard-way-allow-external \
+    --property cluster=kubernetes-the-hard-way --property pool=bastion \
+    --nic net-id=$(openstack network show kubernetes-the-hard-way --format json | jq -r '.id'),v4-fixed-ip=10.240.0.5 \
+    bastion-${i}
+done
+```
+
+Allocate a static IP address that will be attached to the bastion host:
+
+```bash
+openstack floating ip create FLOATING_IP_NETWORK_ID --format json | jq '. | {"id": .id, "ip": .floating_ip_address}'
+```
+
+Output:
+
+```json
+{
+  "id": "a9c0c748-5ff9-450f-8a0e-6f5317122a82",
+  "ip": "X.X.X.X"
+}
+```
+
+Verify the floating IP address was created:
+
+```bash
+openstack floating ip show FLOATING_IP_ID --format json
+```
+
+Output:
+
+```json
+{
+  "router_id": null,
+  "status": "DOWN",
+  "description": "",
+  "tags": [],
+  "subnet_id": null,
+  "dns_name": "",
+  "created_at": "2019-01-03T21:44:20Z",
+  "updated_at": "2019-01-03T21:44:20Z",
+  "dns_domain": "",
+  "floating_network_id": "96af047d-5522-4a02-8613-20067c347332",
+  "port_details": null,
+  "fixed_ip_address": null,
+  "floating_ip_address": "X.X.X.X",
+  "location": null,
+  "revision_number": 1,
+  "qos_policy_id": null,
+  "project_id": "xyz",
+  "port_id": null,
+  "id": "a9c0c748-5ff9-450f-8a0e-6f5317122a82",
+  "name": "X.X.X.X"
+}
+```
+
+Associate the bastion floating IP with the bastion instance.
+
+```bash
+openstack server add floating ip bastion-0 FLOATING_IP
+```
+
+Output:
+
+```json
+{
+  "id": "a9c0c748-5ff9-450f-8a0e-6f5317122a82",
+  "ip": "X.X.X.X"
+}
+```
 
 ### Kubernetes Controllers
 
-Create three compute instances which will host the Kubernetes control plane:
+Create three compute instances that will host the Kubernetes control plane. The flavor you choose for controller instances should at bare minimum include 1vCPU and 1GB RAM.
 
-```
+```bash
+## customize these
+COMPUTE_AZ=cloud-1-c
+FLAVOR=1vCPUx2GB
+KEYPAIR=my-keypair
+STORAGE_AZ=nova
+UBUNTU_IMAGE=UBUNTU-18.04
+
 for i in 0 1 2; do
-  gcloud compute instances create controller-${i} \
-    --async \
-    --boot-disk-size 200GB \
-    --can-ip-forward \
-    --image-family ubuntu-1804-lts \
-    --image-project ubuntu-os-cloud \
-    --machine-type n1-standard-1 \
-    --private-network-ip 10.240.0.1${i} \
-    --scopes compute-rw,storage-ro,service-management,service-control,logging-write,monitoring \
-    --subnet kubernetes \
-    --tags kubernetes-the-hard-way,controller
+  openstack volume create --image ${UBUNTU_IMAGE} \
+    --availability-zone ${STORAGE_AZ} --size 20 \
+    --bootable controller-${i}
+
+  openstack server create \
+    --availability-zone ${COMPUTE_AZ} --key-name ${KEYPAIR} --volume controller-${i} \
+    --flavor ${FLAVOR} --security-group kubernetes-the-hard-way-allow-internal \
+    --property cluster=kubernetes-the-hard-way --property pool=controller \
+    --nic net-id=$(openstack network show kubernetes-the-hard-way --format json | jq -r '.id'),v4-fixed-ip=10.240.0.1${i} \
+    controller-${i}
 done
 ```
 
@@ -122,20 +342,26 @@ Each worker instance requires a pod subnet allocation from the Kubernetes cluste
 
 Create three compute instances which will host the Kubernetes worker nodes:
 
-```
+```bash
+## customize these
+COMPUTE_AZ=cloud-1-c
+FLAVOR=1vCPUx2GB
+KEYPAIR=my-keypair
+STORAGE_AZ=nova
+UBUNTU_IMAGE=UBUNTU-18.04
+
 for i in 0 1 2; do
-  gcloud compute instances create worker-${i} \
-    --async \
-    --boot-disk-size 200GB \
-    --can-ip-forward \
-    --image-family ubuntu-1804-lts \
-    --image-project ubuntu-os-cloud \
-    --machine-type n1-standard-1 \
-    --metadata pod-cidr=10.200.${i}.0/24 \
-    --private-network-ip 10.240.0.2${i} \
-    --scopes compute-rw,storage-ro,service-management,service-control,logging-write,monitoring \
-    --subnet kubernetes \
-    --tags kubernetes-the-hard-way,worker
+  openstack volume create --image ${UBUNTU_IMAGE} \
+    --availability-zone ${STORAGE_AZ} --size 20 \
+    --bootable worker-${i}
+
+  openstack server create \
+    --availability-zone ${COMPUTE_AZ} --key-name ${KEYPAIR} --volume worker-${i} \
+    --flavor ${FLAVOR} --security-group kubernetes-the-hard-way-allow-internal \
+    --property cluster=kubernetes-the-hard-way --property pool=worker \
+    --property pod-cidr=10.200.${i}.0/24 \
+    --nic net-id=$(openstack network show kubernetes-the-hard-way --format json | jq -r '.id'),v4-fixed-ip=10.240.0.2${i} \
+    worker-${i}
 done
 ```
 
@@ -143,88 +369,102 @@ done
 
 List the compute instances in your default compute zone:
 
-```
-gcloud compute instances list
-```
-
-> output
-
-```
-NAME          ZONE        MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP     STATUS
-controller-0  us-west1-c  n1-standard-1               10.240.0.10  XX.XXX.XXX.XXX  RUNNING
-controller-1  us-west1-c  n1-standard-1               10.240.0.11  XX.XXX.X.XX     RUNNING
-controller-2  us-west1-c  n1-standard-1               10.240.0.12  XX.XXX.XXX.XX   RUNNING
-worker-0      us-west1-c  n1-standard-1               10.240.0.20  XXX.XXX.XXX.XX  RUNNING
-worker-1      us-west1-c  n1-standard-1               10.240.0.21  XX.XXX.XX.XXX   RUNNING
-worker-2      us-west1-c  n1-standard-1               10.240.0.22  XXX.XXX.XX.XX   RUNNING
+```bash
+openstack server list
+# +--------------------------------------+--------------+--------+---------------------------------------------+-------+-----------+
+# | ID                                   | Name         | Status | Networks                                    | Image | Flavor    |
+# +--------------------------------------+--------------+--------+---------------------------------------------+-------+-----------+
+# | 55d63612-331a-47dd-9636-06edb7a3e6d5 | bastion-0    | ACTIVE | kubernetes-the-hard-way=10.240.0.5, X.X.X.X |       | 1vCPUx2GB |
+# | c87cb7ad-dc34-4566-b266-92bb9587d918 | worker-2     | ACTIVE | kubernetes-the-hard-way=10.240.0.22         |       | 1vCPUx2GB |
+# | b9e65a1f-6244-4bb9-8059-410ad925aa3c | worker-1     | ACTIVE | kubernetes-the-hard-way=10.240.0.21         |       | 1vCPUx2GB |
+# | 7d00f75e-2312-483d-b34f-cc302810b23b | worker-0     | ACTIVE | kubernetes-the-hard-way=10.240.0.20         |       | 1vCPUx2GB |
+# | df4f6387-2a61-4baa-8f87-67100f28168e | controller-2 | ACTIVE | kubernetes-the-hard-way=10.240.0.12         |       | 1vCPUx2GB |
+# | 81774eef-df42-4d78-99c7-c96dc6ad8385 | controller-1 | ACTIVE | kubernetes-the-hard-way=10.240.0.11         |       | 1vCPUx2GB |
+# | 40f440cc-c612-4a79-8ad6-1c0e3de71326 | controller-0 | ACTIVE | kubernetes-the-hard-way=10.240.0.10         |       | 1vCPUx2GB |
+# +--------------------------------------+--------------+--------+---------------------------------------------+-------+-----------+
 ```
 
 ## Configuring SSH Access
 
-SSH will be used to configure the controller and worker instances. When connecting to compute instances for the first time SSH keys will be generated for you and stored in the project or instance metadata as describe in the [connecting to instances](https://cloud.google.com/compute/docs/instances/connecting-to-instance) documentation.
+NOTE: Creation and handling of SSH keys is outside the scope of this tutorial.
 
-Test SSH access to the `controller-0` compute instances:
+SSH will be used to configure the controller and worker instances.
 
-```
-gcloud compute ssh controller-0
-```
-
-If this is your first time connecting to a compute instance SSH keys will be generated for you. Enter a passphrase at the prompt to continue:
+Test SSH access to the `bastion-0` instance:
 
 ```
-WARNING: The public SSH key file for gcloud does not exist.
-WARNING: The private SSH key file for gcloud does not exist.
-WARNING: You do not have an SSH key for gcloud.
-WARNING: SSH keygen will be executed to generate a key.
-Generating public/private rsa key pair.
-Enter passphrase (empty for no passphrase):
-Enter same passphrase again:
+ssh -A ubuntu@BASTION_FLOATING_IP
+# Welcome to Ubuntu 18.04 LTS (GNU/Linux 4.15.0-1006-generic x86_64)
+# ...
+# Last login: Sun May 13 14:34:27 2018 from X.X.X.X
 ```
 
-At this point the generated SSH keys will be uploaded and stored in your project:
+Type `exit` at the prompt to exit the `bastion-0` instance:
 
 ```
-Your identification has been saved in /home/$USER/.ssh/google_compute_engine.
-Your public key has been saved in /home/$USER/.ssh/google_compute_engine.pub.
-The key fingerprint is:
-SHA256:nz1i8jHmgQuGt+WscqP5SeIaSy5wyIJeL71MuV+QruE $USER@$HOSTNAME
-The key's randomart image is:
-+---[RSA 2048]----+
-|                 |
-|                 |
-|                 |
-|        .        |
-|o.     oS        |
-|=... .o .o o     |
-|+.+ =+=.+.X o    |
-|.+ ==O*B.B = .   |
-| .+.=EB++ o      |
-+----[SHA256]-----+
-Updating project ssh metadata...-Updated [https://www.googleapis.com/compute/v1/projects/$PROJECT_ID].
-Updating project ssh metadata...done.
-Waiting for SSH key to propagate.
+$USER@bastion-0:~$ exit
+# logout
+# Connection to X.X.X.X closed
 ```
 
-After the SSH keys have been updated you'll be logged into the `controller-0` instance:
+You can optionally add a snippet like the following to your `~/.ssh/config` file. Doing so should allow you to automatically proxy through the bastion host to your controller and worker instances.
 
 ```
-Welcome to Ubuntu 18.04 LTS (GNU/Linux 4.15.0-1006-gcp x86_64)
+Host bastion-0
+  User ubuntu
+  Hostname X.X.X.X
+  IdentityFile /vagrant/my-keypair.pem
 
-...
+Host controller-0
+  User ubuntu
+  Hostname 10.240.0.10
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
 
-Last login: Sun May 13 14:34:27 2018 from XX.XXX.XXX.XX
+Host controller-1
+  User ubuntu
+  Hostname 10.240.0.11
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
+
+Host controller-2
+  User ubuntu
+  Hostname 10.240.0.12
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
+
+Host worker-0
+  User ubuntu
+  Hostname 10.240.0.20
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
+
+Host worker-1
+  User ubuntu
+  Hostname 10.240.0.21
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
+
+Host worker-2
+  User ubuntu
+  Hostname 10.240.0.22
+  IdentityFile /vagrant/my-keypair.pem
+  ProxyCommand ssh bastion-0 -W %h:%p
 ```
 
-Type `exit` at the prompt to exit the `controller-0` compute instance:
+If you implement a customized version of the above config, you should be able to SSH from your development machine to `controller-0` like this:
 
 ```
-$USER@controller-0:~$ exit
-```
-> output
-
-```
-logout
-Connection to XX.XXX.XXX.XXX closed
+ssh controller-0
 ```
 
 Next: [Provisioning a CA and Generating TLS Certificates](04-certificate-authority.md)
+
+<!--- Hidden References -->
+
+[az]: https://docs.openstack.org/newton/networking-guide/config-az.html
+[lb]: https://docs.openstack.org/mitaka/networking-guide/config-lbaas.html
+[openstack-create-instances]: https://docs.openstack.org/ocata/user-guide/cli-launch-instances.html
+[self-service-network]: https://docs.openstack.org/newton/install-guide-ubuntu/launch-instance-networks-selfservice.html
+[ubuntu]: http://releases.ubuntu.com/18.04/
+[vpc]: https://cloud.google.com/compute/docs/vpc/

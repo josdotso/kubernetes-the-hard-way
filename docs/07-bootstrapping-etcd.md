@@ -4,10 +4,10 @@ Kubernetes components are stateless and store cluster state in [etcd](https://gi
 
 ## Prerequisites
 
-The commands in this lab must be run on each controller instance: `controller-0`, `controller-1`, and `controller-2`. Login to each controller instance using the `gcloud` command. Example:
+The commands in this lab must be run on each controller instance: `controller-0`, `controller-1`, and `controller-2`. Login to each controller instance using the `ssh` command. Example:
 
 ```
-gcloud compute ssh controller-0
+ssh controller-0
 ```
 
 ### Running commands in parallel with tmux
@@ -46,8 +46,7 @@ Extract and install the `etcd` server and the `etcdctl` command line utility:
 The instance internal IP address will be used to serve client requests and communicate with etcd cluster peers. Retrieve the internal IP address for the current compute instance:
 
 ```
-INTERNAL_IP=$(curl -s -H "Metadata-Flavor: Google" \
-  http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/ip)
+INTERNAL_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
 ```
 
 Each etcd member must have a unique name within an etcd cluster. Set the etcd name to match the hostname of the current compute instance:
@@ -122,5 +121,26 @@ sudo ETCDCTL_API=3 etcdctl member list \
 f98dc20bce6225a0, started, controller-0, https://10.240.0.10:2380, https://10.240.0.10:2379
 ffed16798470cab5, started, controller-1, https://10.240.0.11:2380, https://10.240.0.11:2379
 ```
+
+If the above command doesn't result in the expected output, review etcd's logs for signs that etcd is having trouble connnecting peer-to-peer:
+
+```
+sudo journalctl --unit=etcd.service | tail -n20
+```
+
+In some cases a host firewall is configured by default that denies etcd intra-cluster traffic. Such host firewall hardening is out of scope for this tutorial. Pre-configured host firewall policies are many times redundant to the firewalling effects of OpenStack Security Groups.
+
+To disable `firewalld` and `ufw` you can run:
+
+```
+for f in firewalld ufw; do
+  sudo systemctl status ${f}  # Confirm that ${f} is actually running before disabling it.
+  sudo systemctl disable ${f}
+  sudo systemctl stop ${f}
+  sudo systemctl status ${f}  # Validate that ${f} is stopped.
+done
+```
+
+After clearing any prohibitive default host firewall rules (e.g. by disabling `firewalld`), go back and try to verify etcd's cluster health again. Keep debugging until the etcd cluster is fully healthy.
 
 Next: [Bootstrapping the Kubernetes Control Plane](08-bootstrapping-kubernetes-controllers.md)

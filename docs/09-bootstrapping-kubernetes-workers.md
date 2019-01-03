@@ -4,10 +4,10 @@ In this lab you will bootstrap three Kubernetes worker nodes. The following comp
 
 ## Prerequisites
 
-The commands in this lab must be run on each worker instance: `worker-0`, `worker-1`, and `worker-2`. Login to each worker instance using the `gcloud` command. Example:
+The commands in this lab must be run on each worker instance: `worker-0`, `worker-1`, and `worker-2`. Login to each worker instance using the `ssh` command. Example:
 
-```
-gcloud compute ssh worker-0
+```bash
+ssh worker-0
 ```
 
 ### Running commands in parallel with tmux
@@ -18,7 +18,7 @@ gcloud compute ssh worker-0
 
 Install the OS dependencies:
 
-```
+```bash
 {
   sudo apt-get update
   sudo apt-get -y install socat conntrack ipset
@@ -29,21 +29,21 @@ Install the OS dependencies:
 
 ### Download and Install Worker Binaries
 
-```
+```bash
 wget -q --show-progress --https-only --timestamping \
-  https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.12.0/crictl-v1.12.0-linux-amd64.tar.gz \
+  https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.12.4/crictl-v1.12.4-linux-amd64.tar.gz \
   https://storage.googleapis.com/kubernetes-the-hard-way/runsc-50c283b9f56bb7200938d9e207355f05f79f0d17 \
   https://github.com/opencontainers/runc/releases/download/v1.0.0-rc5/runc.amd64 \
   https://github.com/containernetworking/plugins/releases/download/v0.6.0/cni-plugins-amd64-v0.6.0.tgz \
   https://github.com/containerd/containerd/releases/download/v1.2.0-rc.0/containerd-1.2.0-rc.0.linux-amd64.tar.gz \
-  https://storage.googleapis.com/kubernetes-release/release/v1.12.0/bin/linux/amd64/kubectl \
-  https://storage.googleapis.com/kubernetes-release/release/v1.12.0/bin/linux/amd64/kube-proxy \
-  https://storage.googleapis.com/kubernetes-release/release/v1.12.0/bin/linux/amd64/kubelet
+  https://storage.googleapis.com/kubernetes-release/release/v1.12.4/bin/linux/amd64/kubectl \
+  https://storage.googleapis.com/kubernetes-release/release/v1.12.4/bin/linux/amd64/kube-proxy \
+  https://storage.googleapis.com/kubernetes-release/release/v1.12.4/bin/linux/amd64/kubelet
 ```
 
 Create the installation directories:
 
-```
+```bash
 sudo mkdir -p \
   /etc/cni/net.d \
   /opt/cni/bin \
@@ -55,13 +55,13 @@ sudo mkdir -p \
 
 Install the worker binaries:
 
-```
+```bash
 {
   sudo mv runsc-50c283b9f56bb7200938d9e207355f05f79f0d17 runsc
   sudo mv runc.amd64 runc
   chmod +x kubectl kube-proxy kubelet runc runsc
   sudo mv kubectl kube-proxy kubelet runc runsc /usr/local/bin/
-  sudo tar -xvf crictl-v1.12.0-linux-amd64.tar.gz -C /usr/local/bin/
+  sudo tar -xvf crictl-v1.12.4-linux-amd64.tar.gz -C /usr/local/bin/
   sudo tar -xvf cni-plugins-amd64-v0.6.0.tgz -C /opt/cni/bin/
   sudo tar -xvf containerd-1.2.0-rc.0.linux-amd64.tar.gz -C /
 }
@@ -71,14 +71,16 @@ Install the worker binaries:
 
 Retrieve the Pod CIDR range for the current compute instance:
 
-```
-POD_CIDR=$(curl -s -H "Metadata-Flavor: Google" \
-  http://metadata.google.internal/computeMetadata/v1/instance/attributes/pod-cidr)
+```bash
+sudo apt install -y jq
+
+POD_CIDR=$(curl -s http://169.254.169.254/openstack/latest/meta_data.json \
+  | jq -r '.meta["pod-cidr"]')
 ```
 
 Create the `bridge` network configuration file:
 
-```
+```bash
 cat <<EOF | sudo tee /etc/cni/net.d/10-bridge.conf
 {
     "cniVersion": "0.3.1",
@@ -100,7 +102,7 @@ EOF
 
 Create the `loopback` network configuration file:
 
-```
+```bash
 cat <<EOF | sudo tee /etc/cni/net.d/99-loopback.conf
 {
     "cniVersion": "0.3.1",
@@ -113,11 +115,11 @@ EOF
 
 Create the `containerd` configuration file:
 
-```
+```bash
 sudo mkdir -p /etc/containerd/
 ```
 
-```
+```bash
 cat << EOF | sudo tee /etc/containerd/config.toml
 [plugins]
   [plugins.cri.containerd]
@@ -141,7 +143,7 @@ EOF
 
 Create the `containerd.service` systemd unit file:
 
-```
+```bash
 cat <<EOF | sudo tee /etc/systemd/system/containerd.service
 [Unit]
 Description=containerd container runtime
@@ -167,7 +169,7 @@ EOF
 
 ### Configure the Kubelet
 
-```
+```bash
 {
   sudo mv ${HOSTNAME}-key.pem ${HOSTNAME}.pem /var/lib/kubelet/
   sudo mv ${HOSTNAME}.kubeconfig /var/lib/kubelet/kubeconfig
@@ -177,7 +179,7 @@ EOF
 
 Create the `kubelet-config.yaml` configuration file:
 
-```
+```bash
 cat <<EOF | sudo tee /var/lib/kubelet/kubelet-config.yaml
 kind: KubeletConfiguration
 apiVersion: kubelet.config.k8s.io/v1beta1
@@ -205,7 +207,7 @@ EOF
 
 Create the `kubelet.service` systemd unit file:
 
-```
+```bash
 cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
 [Unit]
 Description=Kubernetes Kubelet
@@ -233,13 +235,13 @@ EOF
 
 ### Configure the Kubernetes Proxy
 
-```
+```bash
 sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig
 ```
 
 Create the `kube-proxy-config.yaml` configuration file:
 
-```
+```bash
 cat <<EOF | sudo tee /var/lib/kube-proxy/kube-proxy-config.yaml
 kind: KubeProxyConfiguration
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
@@ -252,7 +254,7 @@ EOF
 
 Create the `kube-proxy.service` systemd unit file:
 
-```
+```bash
 cat <<EOF | sudo tee /etc/systemd/system/kube-proxy.service
 [Unit]
 Description=Kubernetes Kube Proxy
@@ -260,7 +262,8 @@ Documentation=https://github.com/kubernetes/kubernetes
 
 [Service]
 ExecStart=/usr/local/bin/kube-proxy \\
-  --config=/var/lib/kube-proxy/kube-proxy-config.yaml
+  --config=/var/lib/kube-proxy/kube-proxy-config.yaml \\
+  --v=4
 Restart=on-failure
 RestartSec=5
 
@@ -271,7 +274,7 @@ EOF
 
 ### Start the Worker Services
 
-```
+```bash
 {
   sudo systemctl daemon-reload
   sudo systemctl enable containerd kubelet kube-proxy
@@ -287,18 +290,12 @@ EOF
 
 List the registered Kubernetes nodes:
 
-```
-gcloud compute ssh controller-0 \
-  --command "kubectl get nodes --kubeconfig admin.kubeconfig"
-```
-
-> output
-
-```
-NAME       STATUS   ROLES    AGE   VERSION
-worker-0   Ready    <none>   35s   v1.12.0
-worker-1   Ready    <none>   36s   v1.12.0
-worker-2   Ready    <none>   36s   v1.12.0
+```bash
+ssh controller-0 "KUBECONFIG=~/admin.kubconfig kubectl get nodes -o wide"
+# NAME       STATUS   ROLES    AGE     VERSION   INTERNAL-IP   EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION      CONTAINER-RUNTIME
+# worker-0   Ready    <none>   5m14s   v1.12.4   10.240.0.20   <none>        Ubuntu 18.04.1 LTS   4.15.0-43-generic   containerd://1.2.0-rc.0
+# worker-1   Ready    <none>   5m11s   v1.12.4   10.240.0.21   <none>        Ubuntu 18.04.1 LTS   4.15.0-43-generic   containerd://1.2.0-rc.0
+# worker-2   Ready    <none>   5m11s   v1.12.4   10.240.0.22   <none>        Ubuntu 18.04.1 LTS   4.15.0-43-generic   containerd://1.2.0-rc.0
 ```
 
 Next: [Configuring kubectl for Remote Access](10-configuring-kubectl.md)
